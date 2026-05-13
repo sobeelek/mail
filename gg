@@ -1,0 +1,176 @@
+Option Explicit
+
+' ============================================================
+' DRUKOWANIE PDF Z ZAŁĄCZNIKÓW + PRZEKAZYWANIE MAILI
+' ============================================================
+
+Private Function FindAcrobat() As String
+    If Dir("C:\Program Files\Adobe\Acrobat DC\Acrobat\Acrobat.exe") <> "" Then
+        FindAcrobat = "C:\Program Files\Adobe\Acrobat DC\Acrobat\Acrobat.exe"
+    ElseIf Dir("C:\Program Files (x86)\Adobe\Acrobat DC\Acrobat\Acrobat.exe") <> "" Then
+        FindAcrobat = "C:\Program Files (x86)\Adobe\Acrobat DC\Acrobat\Acrobat.exe"
+    End If
+End Function
+
+' --- Przyciski wstążki ---
+Sub Drukuj_PDF_1_na_1() : DrukujPDF 1 : End Sub
+Sub Drukuj_PDF_2_na_1() : DrukujPDF 2 : End Sub
+Sub Drukuj_PDF_Dupleks() : DrukujPDF 3 : End Sub
+
+' ============================================================
+Private Sub DrukujPDF(tryb As Integer)
+
+    Dim adobePath As String
+    adobePath = FindAcrobat()
+    If adobePath = "" Then
+        MsgBox "Nie znaleziono Adobe Acrobat DC!", vbCritical
+        Exit Sub
+    End If
+
+    Dim sel As Selection
+    Set sel = Application.ActiveExplorer.Selection
+    If sel.Count = 0 Then
+        MsgBox "Zaznacz co najmniej jeden mail!", vbExclamation
+        Exit Sub
+    End If
+
+    ' 📁 Folder tymczasowy na pulpicie
+    Dim saveFolder As String
+    saveFolder = Environ("USERPROFILE") & "\Desktop\PDF_OUTLOOK\"
+    If Dir(saveFolder, vbDirectory) = "" Then MkDir saveFolder
+
+    ' 🖨️ Zmień ustawienia drukarki dla trybu 2 i 3
+    Dim printerName As String
+    If tryb > 1 Then
+        printerName = GetDefaultPrinterName()
+        If printerName <> "" Then ApplyPrinterMode printerName, tryb
+    End If
+
+    ' --- Pętla przez zaznaczone maile ---
+    Dim objItem   As Object
+    Dim objAttach As Outlook.Attachment
+    Dim filePath  As String
+    Dim fileName  As String
+    Dim c         As Integer
+    Dim pdfCount  As Integer
+    Dim oWSH      As Object
+    Set oWSH = CreateObject("WScript.Shell")
+    pdfCount = 0
+
+    For Each objItem In sel
+        If TypeOf objItem Is Outlook.MailItem Then
+            For Each objAttach In objItem.Attachments
+                If LCase(Right(objAttach.FileName, 4)) = ".pdf" Then
+
+                    ' Zapis z obsługą duplikatów nazw
+                    fileName = objAttach.FileName
+                    filePath = saveFolder & fileName
+                    c = 1
+                    Do While Dir(filePath) <> ""
+                        filePath = saveFolder & c & "_" & fileName
+                        c = c + 1
+                    Loop
+                    objAttach.SaveAsFile filePath
+
+                    ' 🔥 Drukuj przez Acrobat — czeka na zakończenie procesu
+                    oWSH.Run """" & adobePath & """ /t """ & filePath & """", 1, True
+
+                    ' 🗑️ Usuń plik po wydrukowaniu
+                    On Error Resume Next
+                    Kill filePath
+                    On Error GoTo 0
+
+                    pdfCount = pdfCount + 1
+                End If
+            Next objAttach
+        End If
+    Next objItem
+
+    ' 🖨️ Przywróć oryginalne ustawienia drukarki
+    If tryb > 1 And printerName <> "" Then RestorePrinterMode printerName, tryb
+
+    ' 📧 Prześlij zaznaczone maile
+    ForwardEmails sel, "sobeelek@gmail.com"
+
+    ' --- Podsumowanie ---
+    If pdfCount = 0 Then
+        MsgBox "Nie znaleziono załączników PDF!", vbExclamation
+    Else
+        MsgBox "Gotowe!" & vbNewLine & _
+               "✔ Wydrukowano: " & pdfCount & " PDF" & vbNewLine & _
+               "✔ Maile przesłane na: sobeelek@gmail.com", vbInformation
+    End If
+
+End Sub
+
+' ============================================================
+' Pobierz nazwę domyślnej drukarki przez PowerShell
+Private Function GetDefaultPrinterName() As String
+    On Error Resume Next
+    Dim oWSH As Object
+    Set oWSH = CreateObject("WScript.Shell")
+    Dim oExec As Object
+    Set oExec = oWSH.Exec("powershell -NoProfile -Command ""(Get-WmiObject -Query 'SELECT * FROM Win32_Printer WHERE Default=True').Name""")
+    GetDefaultPrinterName = Trim(oExec.StdOut.ReadAll())
+    On Error GoTo 0
+End Function
+
+' ============================================================
+' Zmień tryb drukarki przez PowerShell (Set-PrintConfiguration)
+Private Sub ApplyPrinterMode(printerName As String, tryb As Integer)
+    Dim psFile As String
+    psFile = Environ("TEMP") & "\apply_mode.ps1"
+
+    Dim f As Integer
+    f = FreeFile
+    Open psFile For Output As #f
+    Select Case tryb
+        Case 2  ' 2 strony na 1 kartkę
+            Print #f, "Set-PrintConfiguration -PrinterName '" & Replace(printerName, "'", "''") & "' -PagesPerSheet 2"
+        Case 3  ' Dupleks
+            Print #f, "Set-PrintConfiguration -PrinterName '" & Replace(printerName, "'", "''") & "' -DuplexingMode TwoSidedLongEdge"
+    End Select
+    Close #f
+
+    Dim oWSH As Object
+    Set oWSH = CreateObject("WScript.Shell")
+    oWSH.Run "powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & psFile & """", 0, True
+    Kill psFile
+End Sub
+
+' ============================================================
+' Przywróć domyślne ustawienia drukarki
+Private Sub RestorePrinterMode(printerName As String, tryb As Integer)
+    Dim psFile As String
+    psFile = Environ("TEMP") & "\restore_mode.ps1"
+
+    Dim f As Integer
+    f = FreeFile
+    Open psFile For Output As #f
+    Select Case tryb
+        Case 2
+            Print #f, "Set-PrintConfiguration -PrinterName '" & Replace(printerName, "'", "''") & "' -PagesPerSheet 1"
+        Case 3
+            Print #f, "Set-PrintConfiguration -PrinterName '" & Replace(printerName, "'", "''") & "' -DuplexingMode OneSided"
+    End Select
+    Close #f
+
+    Dim oWSH As Object
+    Set oWSH = CreateObject("WScript.Shell")
+    oWSH.Run "powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & psFile & """", 0, True
+    Kill psFile
+End Sub
+
+' ============================================================
+' Prześlij zaznaczone maile na podany adres
+Private Sub ForwardEmails(sel As Selection, adres As String)
+    Dim objItem As Object
+    Dim objFwd  As Outlook.MailItem
+    For Each objItem In sel
+        If TypeOf objItem Is Outlook.MailItem Then
+            Set objFwd = objItem.Forward()
+            objFwd.To = adres
+            objFwd.Send
+        End If
+    Next objItem
+End Sub
