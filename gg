@@ -39,12 +39,10 @@ Private Sub DrukujPDF(tryb As Integer)
     saveFolder = Environ("USERPROFILE") & "\Desktop\PDF_OUTLOOK\"
     If Dir(saveFolder, vbDirectory) = "" Then MkDir saveFolder
 
-    ' 🖨️ Zmień ustawienia drukarki dla trybu 2 i 3
+    ' 🖨️ Zmień ustawienia drukarki dla wszystkich trybów
     Dim printerName As String
-    If tryb > 1 Then
-        printerName = GetDefaultPrinterName()
-        If printerName <> "" Then ApplyPrinterMode printerName, tryb
-    End If
+    printerName = GetDefaultPrinterName()
+    If printerName <> "" Then ApplyPrinterMode printerName, tryb
 
     ' --- Pętla przez zaznaczone maile ---
     Dim objItem   As Object
@@ -72,7 +70,7 @@ Private Sub DrukujPDF(tryb As Integer)
                     Loop
                     objAttach.SaveAsFile filePath
 
-                    ' 🔥 Drukuj przez Acrobat — czeka na zakończenie procesu
+                    ' 🔥 Drukuj przez Acrobat — czeka na zakończenie
                     oWSH.Run """" & adobePath & """ /t """ & filePath & """", 1, True
 
                     ' 🗑️ Usuń plik po wydrukowaniu
@@ -87,7 +85,7 @@ Private Sub DrukujPDF(tryb As Integer)
     Next objItem
 
     ' 🖨️ Przywróć oryginalne ustawienia drukarki
-    If tryb > 1 And printerName <> "" Then RestorePrinterMode printerName, tryb
+    If printerName <> "" Then RestorePrinterMode printerName, tryb
 
     ' 📧 Prześlij zaznaczone maile
     ForwardEmails sel, "sobeelek@gmail.com"
@@ -97,14 +95,13 @@ Private Sub DrukujPDF(tryb As Integer)
         MsgBox "Nie znaleziono załączników PDF!", vbExclamation
     Else
         MsgBox "Gotowe!" & vbNewLine & _
-               "✔ Wydrukowano: " & pdfCount & " PDF" & vbNewLine & _
-               "✔ Maile przesłane na: sobeelek@gmail.com", vbInformation
+               "Wydrukowano: " & pdfCount & " PDF" & vbNewLine & _
+               "Maile przesłane na: sobeelek@gmail.com", vbInformation
     End If
 
 End Sub
 
 ' ============================================================
-' Pobierz nazwę domyślnej drukarki przez PowerShell
 Private Function GetDefaultPrinterName() As String
     On Error Resume Next
     Dim oWSH As Object
@@ -116,7 +113,6 @@ Private Function GetDefaultPrinterName() As String
 End Function
 
 ' ============================================================
-' Zmień tryb drukarki przez PowerShell (Set-PrintConfiguration)
 Private Sub ApplyPrinterMode(printerName As String, tryb As Integer)
     Dim psFile As String
     psFile = Environ("TEMP") & "\apply_mode.ps1"
@@ -125,10 +121,12 @@ Private Sub ApplyPrinterMode(printerName As String, tryb As Integer)
     f = FreeFile
     Open psFile For Output As #f
     Select Case tryb
-        Case 2  ' 2 strony na 1 kartkę
-            Print #f, "Set-PrintConfiguration -PrinterName '" & Replace(printerName, "'", "''") & "' -PagesPerSheet 2"
-        Case 3  ' Dupleks
-            Print #f, "Set-PrintConfiguration -PrinterName '" & Replace(printerName, "'", "''") & "' -DuplexingMode TwoSidedLongEdge"
+        Case 1  ' 1 strona na 1 kartkę — pion
+            Print #f, "Set-PrintConfiguration -PrinterName '" & Replace(printerName, "'", "''") & "' -PagesPerSheet 1 -PrintOrientation Portrait"
+        Case 2  ' 2 strony na 1 kartkę — pion
+            Print #f, "Set-PrintConfiguration -PrinterName '" & Replace(printerName, "'", "''") & "' -PagesPerSheet 2 -PrintOrientation Portrait"
+        Case 3  ' Dupleks — pion
+            Print #f, "Set-PrintConfiguration -PrinterName '" & Replace(printerName, "'", "''") & "' -DuplexingMode TwoSidedLongEdge -PrintOrientation Portrait"
     End Select
     Close #f
 
@@ -139,7 +137,6 @@ Private Sub ApplyPrinterMode(printerName As String, tryb As Integer)
 End Sub
 
 ' ============================================================
-' Przywróć domyślne ustawienia drukarki
 Private Sub RestorePrinterMode(printerName As String, tryb As Integer)
     Dim psFile As String
     psFile = Environ("TEMP") & "\restore_mode.ps1"
@@ -148,6 +145,8 @@ Private Sub RestorePrinterMode(printerName As String, tryb As Integer)
     f = FreeFile
     Open psFile For Output As #f
     Select Case tryb
+        Case 1
+            Print #f, "Set-PrintConfiguration -PrinterName '" & Replace(printerName, "'", "''") & "' -PagesPerSheet 1"
         Case 2
             Print #f, "Set-PrintConfiguration -PrinterName '" & Replace(printerName, "'", "''") & "' -PagesPerSheet 1"
         Case 3
@@ -162,7 +161,6 @@ Private Sub RestorePrinterMode(printerName As String, tryb As Integer)
 End Sub
 
 ' ============================================================
-' Prześlij zaznaczone maile na podany adres
 Private Sub ForwardEmails(sel As Selection, adres As String)
     Dim objItem As Object
     Dim objFwd  As Outlook.MailItem
