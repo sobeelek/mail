@@ -1,174 +1,197 @@
 Option Explicit
 
 ' ============================================================
-' DRUKOWANIE PDF Z ZAŁĄCZNIKÓW + PRZEKAZYWANIE MAILI
+' ZNAJDŹ SUMATRA PDF
 ' ============================================================
+Private Function FindSumatra() As String
 
-Private Function FindAcrobat() As String
-    If Dir("C:\Program Files\Adobe\Acrobat DC\Acrobat\Acrobat.exe") <> "" Then
-        FindAcrobat = "C:\Program Files\Adobe\Acrobat DC\Acrobat\Acrobat.exe"
-    ElseIf Dir("C:\Program Files (x86)\Adobe\Acrobat DC\Acrobat\Acrobat.exe") <> "" Then
-        FindAcrobat = "C:\Program Files (x86)\Adobe\Acrobat DC\Acrobat\Acrobat.exe"
-    End If
+    Dim paths(3) As String
+    paths(0) = "C:\Program Files\SumatraPDF\SumatraPDF.exe"
+    paths(1) = "C:\Program Files (x86)\SumatraPDF\SumatraPDF.exe"
+    paths(2) = Environ("LOCALAPPDATA") & "\SumatraPDF\SumatraPDF.exe"
+    paths(3) = Environ("USERPROFILE") & "\Desktop\SumatraPDF.exe"
+
+    Dim i As Integer
+    For i = 0 To 3
+        If Dir(paths(i)) <> "" Then
+            FindSumatra = paths(i)
+            Exit Function
+        End If
+    Next i
+
+    FindSumatra = ""
+
 End Function
 
-' --- Przyciski wstążki ---
-Sub Drukuj_PDF_1_na_1() : DrukujPDF 1 : End Sub
-Sub Drukuj_PDF_2_na_1() : DrukujPDF 2 : End Sub
-Sub Drukuj_PDF_Dupleks() : DrukujPDF 3 : End Sub
+' ============================================================
+' PRZYCISKI
+' ============================================================
+Sub Drukuj_PDF_1_na_1(): DrukujPDF 1: End Sub
+Sub Drukuj_PDF_2_na_1(): DrukujPDF 2: End Sub
+Sub Drukuj_PDF_Dupleks(): DrukujPDF 3: End Sub
 
+' ============================================================
+' GŁÓWNA PROCEDURA
 ' ============================================================
 Private Sub DrukujPDF(tryb As Integer)
 
-    Dim adobePath As String
-    adobePath = FindAcrobat()
-    If adobePath = "" Then
-        MsgBox "Nie znaleziono Adobe Acrobat DC!", vbCritical
+    ' --- Znajdź SumatraPDF ---
+    Dim sumatraPath As String
+    sumatraPath = FindSumatra()
+
+    If sumatraPath = "" Then
+        MsgBox "Nie znaleziono SumatraPDF!" & vbCrLf & _
+               "Pobierz ze: https://www.sumatrapdfreader.org", vbCritical
         Exit Sub
     End If
 
+    ' --- Sprawdź zaznaczenie ---
     Dim sel As Selection
     Set sel = Application.ActiveExplorer.Selection
+
     If sel.Count = 0 Then
         MsgBox "Zaznacz co najmniej jeden mail!", vbExclamation
         Exit Sub
     End If
 
-    ' 📁 Folder tymczasowy na pulpicie
+    ' --- Folder tymczasowy ---
     Dim saveFolder As String
     saveFolder = Environ("USERPROFILE") & "\Desktop\PDF_OUTLOOK\"
+
     If Dir(saveFolder, vbDirectory) = "" Then MkDir saveFolder
 
-    ' 🖨️ Zmień ustawienia drukarki dla wszystkich trybów
+    ' --- Drukarka domyślna ---
     Dim printerName As String
     printerName = GetDefaultPrinterName()
-    If printerName <> "" Then ApplyPrinterMode printerName, tryb
 
-    ' --- Pętla przez zaznaczone maile ---
-    Dim objItem   As Object
+    If printerName = "" Then
+        MsgBox "Nie znaleziono drukarki!", vbCritical
+        Exit Sub
+    End If
+
+    ' --- Ustawienia druku wg trybu ---
+    Dim printSettings As String
+    Select Case tryb
+        Case 1: printSettings = "1x1"         ' 1 strona na 1 — jednostronnie
+        Case 2: printSettings = "2x1"         ' 2 strony na 1 — jednostronnie
+        Case 3: printSettings = "duplexlong"  ' dupleks (długa krawędź)
+    End Select
+
+    ' --- Iteruj po mailach i załącznikach ---
+    Dim objItem As Object
     Dim objAttach As Outlook.Attachment
-    Dim filePath  As String
-    Dim fileName  As String
-    Dim c         As Integer
-    Dim pdfCount  As Integer
-    Dim oWSH      As Object
-    Set oWSH = CreateObject("WScript.Shell")
+    Dim filePath As String
+    Dim fileName As String
+    Dim pdfCount As Integer
     pdfCount = 0
 
-    For Each objItem In sel
-        If TypeOf objItem Is Outlook.MailItem Then
-            For Each objAttach In objItem.Attachments
-                If LCase(Right(objAttach.FileName, 4)) = ".pdf" Then
+    Dim filesToDelete As Collection
+    Set filesToDelete = New Collection
 
-                    ' Zapis z obsługą duplikatów nazw
-                    fileName = objAttach.FileName
+    Dim sh As Object
+    Set sh = CreateObject("WScript.Shell")
+
+    For Each objItem In sel
+
+        If TypeOf objItem Is Outlook.MailItem Then
+
+            For Each objAttach In objItem.Attachments
+
+                If LCase(Right(objAttach.fileName, 4)) = ".pdf" Then
+
+                    ' Zapisz plik tymczasowo
+                    fileName = objAttach.fileName
                     filePath = saveFolder & fileName
+
+                    Dim c As Integer
                     c = 1
                     Do While Dir(filePath) <> ""
                         filePath = saveFolder & c & "_" & fileName
                         c = c + 1
                     Loop
+
                     objAttach.SaveAsFile filePath
 
-                    ' 🔥 Drukuj przez Acrobat — czeka na zakończenie
-                    oWSH.Run """" & adobePath & """ /t """ & filePath & """", 1, True
+                    ' ===========================
+                    ' DRUK — SumatraPDF w tle
+                    ' bWaitOnReturn = True  →  VBA czeka aż Sumatra SKOŃCZY drukować
+                    ' -silent              →  zero okienek, zero dialogów
+                    ' ===========================
+                    Dim cmd As String
+                    cmd = Chr(34) & sumatraPath & Chr(34) & _
+                          " -print-to " & Chr(34) & printerName & Chr(34) & _
+                          " -print-settings " & Chr(34) & printSettings & Chr(34) & _
+                          " -silent" & _
+                          " " & Chr(34) & filePath & Chr(34)
 
-                    ' 🗑️ Usuń plik po wydrukowaniu
-                    On Error Resume Next
-                    Kill filePath
-                    On Error GoTo 0
+                    sh.Run cmd, 0, True   ' 0 = ukryte okno, True = czekaj na koniec
 
+                    filesToDelete.Add filePath
                     pdfCount = pdfCount + 1
+
                 End If
             Next objAttach
         End If
     Next objItem
 
-    ' 🖨️ Przywróć oryginalne ustawienia drukarki
-    If printerName <> "" Then RestorePrinterMode printerName, tryb
+    ' ===========================
+    ' CZYSZCZENIE PLIKÓW
+    ' (Sumatra już skończyła, można usuwać)
+    ' ===========================
+    Dim f As Variant
+    For Each f In filesToDelete
+        On Error Resume Next
+        Kill CStr(f)
+        On Error GoTo 0
+    Next f
 
-    ' 📧 Prześlij zaznaczone maile
-    ForwardEmails sel, "sobeelek@gmail.com"
+    ' ===========================
+    ' PRZEŚLIJ MAILE
+    ' ===========================
+    ForwardEmails sel, "meritum.rmr@wp.pl"
 
-    ' --- Podsumowanie ---
     If pdfCount = 0 Then
-        MsgBox "Nie znaleziono załączników PDF!", vbExclamation
-    Else
-        MsgBox "Gotowe!" & vbNewLine & _
-               "Wydrukowano: " & pdfCount & " PDF" & vbNewLine & _
-               "Maile przesłane na: sobeelek@gmail.com", vbInformation
+        MsgBox "Nie znaleziono żadnych załączników PDF!", vbInformation
     End If
 
 End Sub
 
 ' ============================================================
+' DRUKARKA DOMYŚLNA
+' ============================================================
 Private Function GetDefaultPrinterName() As String
+
     On Error Resume Next
+
     Dim oWSH As Object
     Set oWSH = CreateObject("WScript.Shell")
+
     Dim oExec As Object
-    Set oExec = oWSH.Exec("powershell -NoProfile -Command ""(Get-WmiObject -Query 'SELECT * FROM Win32_Printer WHERE Default=True').Name""")
+    Set oExec = oWSH.Exec( _
+        "powershell -NoProfile -Command ""(Get-WmiObject -Query 'SELECT * FROM Win32_Printer WHERE Default=True').Name""")
+
     GetDefaultPrinterName = Trim(oExec.StdOut.ReadAll())
-    On Error GoTo 0
+
 End Function
 
 ' ============================================================
-Private Sub ApplyPrinterMode(printerName As String, tryb As Integer)
-    Dim psFile As String
-    psFile = Environ("TEMP") & "\apply_mode.ps1"
-
-    Dim f As Integer
-    f = FreeFile
-    Open psFile For Output As #f
-    Select Case tryb
-        Case 1  ' 1 strona na 1 kartkę — pion
-            Print #f, "Set-PrintConfiguration -PrinterName '" & Replace(printerName, "'", "''") & "' -PagesPerSheet 1 -PrintOrientation Portrait"
-        Case 2  ' 2 strony na 1 kartkę — pion
-            Print #f, "Set-PrintConfiguration -PrinterName '" & Replace(printerName, "'", "''") & "' -PagesPerSheet 2 -PrintOrientation Portrait"
-        Case 3  ' Dupleks — pion
-            Print #f, "Set-PrintConfiguration -PrinterName '" & Replace(printerName, "'", "''") & "' -DuplexingMode TwoSidedLongEdge -PrintOrientation Portrait"
-    End Select
-    Close #f
-
-    Dim oWSH As Object
-    Set oWSH = CreateObject("WScript.Shell")
-    oWSH.Run "powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & psFile & """", 0, True
-    Kill psFile
-End Sub
-
-' ============================================================
-Private Sub RestorePrinterMode(printerName As String, tryb As Integer)
-    Dim psFile As String
-    psFile = Environ("TEMP") & "\restore_mode.ps1"
-
-    Dim f As Integer
-    f = FreeFile
-    Open psFile For Output As #f
-    Select Case tryb
-        Case 1
-            Print #f, "Set-PrintConfiguration -PrinterName '" & Replace(printerName, "'", "''") & "' -PagesPerSheet 1"
-        Case 2
-            Print #f, "Set-PrintConfiguration -PrinterName '" & Replace(printerName, "'", "''") & "' -PagesPerSheet 1"
-        Case 3
-            Print #f, "Set-PrintConfiguration -PrinterName '" & Replace(printerName, "'", "''") & "' -DuplexingMode OneSided"
-    End Select
-    Close #f
-
-    Dim oWSH As Object
-    Set oWSH = CreateObject("WScript.Shell")
-    oWSH.Run "powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & psFile & """", 0, True
-    Kill psFile
-End Sub
-
+' PRZEŚLIJ MAILE
 ' ============================================================
 Private Sub ForwardEmails(sel As Selection, adres As String)
+
     Dim objItem As Object
-    Dim objFwd  As Outlook.MailItem
+    Dim objFwd As Outlook.MailItem
+
     For Each objItem In sel
+
         If TypeOf objItem Is Outlook.MailItem Then
+
             Set objFwd = objItem.Forward()
             objFwd.To = adres
             objFwd.Send
+
         End If
+
     Next objItem
+
 End Sub
